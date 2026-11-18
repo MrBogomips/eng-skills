@@ -56,6 +56,11 @@ alternative named with its reason is not history).
 Create and revise skills with the `superpowers:writing-skills` skill: write the eval or pressure test
 first, confirm the baseline fails without the skill, then write the skill.
 
+- Each deliverable is a skill, plus agents where a separate context helps, such as a writer/reviewer pair for
+  independent review.
+- Examples in a skill come from a different domain than its test scenarios, so tests measure the rules, not
+  recall of the example.
+
 ## Git / PR Working Policy
 - Worktree usage: disabled
 - Worktree location: n/a
