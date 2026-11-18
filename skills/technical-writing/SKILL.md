@@ -101,7 +101,14 @@ incident that prompted it, who changed it) belongs to the commit message and the
 
 When the text explains a flow between several participants, a lifecycle, a process with decisions or roles, an
 architecture or a data model, decide whether a diagram should go with it. `references/diagrams.md` maps situations
-to diagram types and says when a diagram does not help. If it helps:
+to diagram types and says when a diagram does not help.
+
+A diagram is warranted, even when a table already lists the same facts, for:
+- a lifecycle with more than three states, or with loops, retries or branches;
+- an exchange among three or more participants;
+- a process with decisions or several roles.
+
+A table can list the states, but only a diagram shows how they connect. When a diagram is warranted:
 
 1. Name it precisely: notation, type and level ("UML state machine diagram of a subscription", "C4 Container
    diagram of the billing system", "BPMN 2.0 process of invoice approval", "ERD in crow's foot notation of the
@@ -130,6 +137,14 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/scan_leaks.py" --git-diff main --whole 'doc
 It must report nothing, or only matches you can justify (`--allow '<regex>'` for a standard name it mistakes for
 an ID). Then reread every user text as a first-time reader. The scan is hygiene, not a security boundary: git
 history and source maps still carry whatever the source carries.
+
+Close your reply with these lines:
+
+```
+Diagram: <the precisely named diagram you drew (where) or propose (with its brief)> | none: <why not>
+Gaps: <facts you left out because the source does not give them> | none
+Scan: <command> → <result>
+```
 
 ## Common mistakes
 

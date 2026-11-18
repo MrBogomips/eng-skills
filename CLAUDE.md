@@ -37,11 +37,19 @@ claude plugin eval .                     # run the eval suite (with a no-plugin 
 claude plugin eval . --case '<glob>'     # run a single eval case or a subset
 claude plugin tag .                      # create the {name}--v{version} release tag
 python3 -m unittest discover tests       # unit tests for bundled scripts
-python3 -m unittest tests.test_scan_leaks.ScanLeaksTest.test_name   # a single test
+python3 -m unittest tests.test_scan_leaks.GoTest.test_package_doc_comment   # a single test
 python3 -m coverage run -m unittest discover tests && python3 -m coverage report
 ```
 
-Run evals with `--no-publish`: reports stay local.
+Run evals with `--no-publish` (reports stay local). The cases write files and use the scanner, so they need
+`--scaffold --allow-tools Bash Write Edit`:
+
+```sh
+claude plugin eval . --scaffold --allow-tools Bash Write Edit --no-publish --trust-plugin --runs 1
+```
+
+Regex graders must target what the guidance forbids, not words a correct answer may also use (a rejected
+alternative named with its reason is not history).
 
 ## Authoring skills
 

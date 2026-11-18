@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: s9-keep-internal-ids
+context:
+  scaffold_script: scaffold.sh

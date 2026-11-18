@@ -379,5 +379,185 @@ class CliTest(unittest.TestCase):
         self.assertIn("--whole", result.stdout)
 
 
+class ReviewRegressionTest(unittest.TestCase):
+    """Regressions found by code review."""
+
+    def test_doc_block_opener_inside_string_is_ignored(self):
+        src = 'http.requestMatchers("/api/**").permitAll();\n// TODO PAY-12 internal\nint x = 1; /* c */\n'
+        self.assertEqual(matches("A.java", src), [])
+
+    def test_form_feed_and_line_separator_keep_line_numbers(self):
+        src = "\x0c\n// TODO PAY-9 internal\n/** Public API (FR-1). */\n"
+        self.assertEqual(scan("ff.ts", src), [(3, "FR-1", "requirement-id")])
+        py = 'X = "a b"\n\n\ndef f():\n    """Uses FR-2."""\n'
+        self.assertEqual(scan("m.py", py), [(5, "FR-2", "requirement-id")])
+
+    def test_banner_comments_are_not_doc_comments(self):
+        self.assertEqual(matches("lib.rs", "//// FR-3 banner\nfn a() {}\n"), [])
+        self.assertEqual(matches("A.cs", "//// FR-3 banner\nclass A {}\n"), [])
+        self.assertEqual(matches("a.js", "/*****\n * internal FR-1 notes\n *****/\n"), [])
+
+    def test_vb_triple_quote_comments(self):
+        src = "''' <summary>Lists FR-1</summary>\n' FR-2 internal\n"
+        self.assertEqual(matches("A.vb", src), ["FR-1"])
+
+    def test_dart_and_c_family(self):
+        self.assertEqual(matches("a.dart", "/// Docs FR-1.\n// FR-2\nvoid f() {}\n"), ["FR-1"])
+        self.assertEqual(matches("a.h", "/** See FR-1. */\n// FR-2\nint f(void);\n"), ["FR-1"])
+
+
+class MetadataPrecisionTest(unittest.TestCase):
+    def test_local_variable_and_comparison_are_not_metadata(self):
+        src = "summary = build()  # TODO(PAY-12): cache\nif description == 'x':  # FR-9 internal\n    pass\n"
+        self.assertEqual(matches("m.py", src), [])
+        ts = "const summary = build(); // TODO PAY-12\nif (description === x) {} // FR-9\n"
+        self.assertEqual(matches("a.ts", ts), [])
+
+    def test_trailing_comment_on_metadata_line_is_not_scanned(self):
+        self.assertEqual(matches("A.cs", '.WithSummary("List orders") // FR-7 internal\n'), [])
+
+    def test_unbalanced_parenthesis_inside_string(self):
+        self.assertEqual(matches("A.cs", '.WithSummary("Sad :(")\nvar y = 2; // TODO PAY-3\n'), [])
+
+    def test_python_triple_quoted_description(self):
+        src = 'app = FastAPI(\n    title="X",\n    description="""\n    Orders API (FR-1).\n    """,\n)\n'
+        self.assertEqual(scan("m.py", src), [(4, "FR-1", "requirement-id")])
+
+
+class PythonScopeTest(unittest.TestCase):
+    def test_methods_of_private_class_are_internal(self):
+        src = 'class _Impl:\n    def run(self):\n        """Implements FR-1."""\n'
+        self.assertEqual(matches("m.py", src), [])
+
+    def test_functions_nested_in_functions_are_internal(self):
+        src = 'def outer():\n    """Outer."""\n    def inner():\n        """FR-2 internal."""\n'
+        self.assertEqual(matches("m.py", src), [])
+
+
+class GoScopeTest(unittest.TestCase):
+    def test_fields_of_unexported_struct_are_internal(self):
+        src = "package a\n\ntype order struct {\n\t// ID per PAY-1\n\tID string\n}\n"
+        self.assertEqual(matches("a.go", src), [])
+
+    def test_methods_on_unexported_receiver_are_internal(self):
+        self.assertEqual(matches("a.go", "package a\n\n// Close per FR-1\nfunc (o *order) Close() {}\n"), [])
+
+    def test_generic_struct_type_group_and_block_comment(self):
+        src = (
+            "/*\nPackage a implements FR-1.\n*/\npackage a\n\n"
+            "type Set[T comparable] struct {\n\t// Items per FR-2\n\tItems []T\n}\n\n"
+            "type (\n\t// ID per FR-3\n\tID string\n)\n"
+        )
+        self.assertEqual(matches("a.go", src), ["FR-1", "FR-2", "FR-3"])
+
+
+class InputRobustnessTest(unittest.TestCase):
+    def run_main(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = scan_leaks.main(list(args))
+        return code, out.getvalue(), err.getvalue()
+
+    def write(self, d, name, data):
+        path = Path(d, name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data.encode("utf-8") if isinstance(data, str) else data)
+        return str(path)
+
+    def test_utf8_bom(self):
+        with tempfile.TemporaryDirectory() as d:
+            files = [
+                self.write(d, "a.yaml", "﻿openapi: 3.1.0\nx: FR-1\n"),
+                self.write(d, "m.py", '﻿"""Module FR-2."""\n'),
+                self.write(d, "a.go", "﻿// Package a FR-3.\npackage a\n"),
+            ]
+            code, out, _ = self.run_main(*files)
+            self.assertEqual(code, 1)
+            for ident in ("FR-1", "FR-2", "FR-3"):
+                self.assertIn(ident, out)
+
+    def test_unparsable_python_warns_and_still_scans_metadata(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = self.write(d, "m.py", 'def broken(:\n    """FR-1"""\nx = dict(description="FR-2")\n')
+            code, out, err = self.run_main(f)
+            self.assertEqual(code, 1)
+            self.assertIn("FR-2", out)
+            self.assertIn("cannot parse", err)
+
+    def test_nul_byte_in_python_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = self.write(d, "m.py", b'"""Doc."""\nx = "\x00"\n')
+            code, _, err = self.run_main(f)
+            self.assertEqual(code, 0)
+            self.assertIn("cannot parse", err)
+
+    def test_unsupported_extension_is_reported_on_stderr(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = self.write(d, "notes.txt", "FR-1\n")
+            code, out, err = self.run_main(f)
+            self.assertEqual((code, out), (0, ""))
+            self.assertIn("skipped", err)
+
+    def test_whole_glob_matches_relative_and_absolute_paths(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.write(d, "docs/g.md", "See FR-1.\n")
+            cwd = os.getcwd()
+            try:
+                os.chdir(d)
+                self.assertEqual(self.run_main("--whole", "docs/*.md", os.path.abspath("docs/g.md"))[0], 1)
+                self.assertEqual(self.run_main("--whole", "**/*.md", "docs/g.md")[0], 1)
+            finally:
+                os.chdir(cwd)
+
+    def test_whole_glob_matching_nothing_warns(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = self.write(d, "a.go", "package a\n")
+            _, _, err = self.run_main("--whole", "manual/*.md", f)
+            self.assertIn("manual/*.md", err)
+
+    def test_duplicate_paths_are_scanned_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = self.write(d, "a.go", "package a\n\n// F is FR-1.\nfunc F() {}\n")
+            _, out, _ = self.run_main(f, f)
+            self.assertEqual(out.count("FR-1"), 1)
+
+    def test_git_diff_with_non_ascii_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            git = ["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@example.com"]
+            subprocess.run(git + ["init", "-q", "-b", "main"], check=True)
+            self.write(d, "keep.txt", "x\n")
+            subprocess.run(git + ["add", "."], check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "init"], check=True)
+            self.write(d, "café.go", "package a\n\n// F is FR-1.\nfunc F() {}\n")
+            cwd = os.getcwd()
+            try:
+                os.chdir(d)
+                code, out, err = self.run_main("--git-diff", "main")
+            finally:
+                os.chdir(cwd)
+            self.assertEqual(code, 1, err)
+            self.assertIn("café.go:3: FR-1", out)
+
+    def test_directory_argument_is_skipped_with_a_note(self):
+        with tempfile.TemporaryDirectory() as d:
+            sub = Path(d, "sub")
+            sub.mkdir()
+            code, _, err = self.run_main(str(sub))
+            self.assertEqual(code, 0)
+            self.assertIn("not a file", err)
+
+    def test_unexpected_error_exits_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = self.write(d, "a.go", "package a\n")
+            original = scan_leaks.scan_text
+            try:
+                scan_leaks.scan_text = lambda *a, **k: 1 / 0
+                code, _, err = self.run_main(f)
+            finally:
+                scan_leaks.scan_text = original
+            self.assertEqual(code, 2)
+            self.assertIn("ZeroDivisionError", err)
+
+
 if __name__ == "__main__":
     unittest.main()

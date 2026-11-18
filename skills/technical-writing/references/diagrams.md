@@ -25,8 +25,9 @@ When the project already uses a notation for this kind of content, use it.
 
 ## When not to draw
 
-- Three elements or fewer, or a straight sequence of steps: a numbered list says it.
-- A table already says it: attributes, options, error codes.
+- Three elements or fewer, or a straight sequence of steps with no branches or loops: a numbered list says it.
+- Facts with no connections between them (attributes, options, error codes): a table says it. A table of states
+  or steps is not a substitute when the reader needs to see the transitions, loops or branches between them.
 - Reference docs for a single member: the contract is text.
 - Class diagrams of DTOs or of code that changes often: they go stale with every change.
 - To decorate: a diagram the text doesn't need will not be maintained.
