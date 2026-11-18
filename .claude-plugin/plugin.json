@@ -4,5 +4,6 @@
   "description": "Skills and agents for engineering work: technical writing, architecture and design.",
   "author": {
     "name": "Giovanni Costagliola"
-  }
+  },
+  "license": "MIT"
 }
