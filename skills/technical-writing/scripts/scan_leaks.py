@@ -65,7 +65,7 @@ API_METADATA = re.compile(
     r"\.With(?:Summary|Description|Tags|DisplayName)\s*\("
     r"|@(?:Operation|Schema|ApiOperation|ApiProperty|ApiResponse|ApiParam|Parameter|Tag)\s*\("
     r"|\[(?:Description|Display|SwaggerOperation)\s*\("
-    r"|\b(?:summary|description)\s*[=:]"
+    r"|\b(?:summary|description)[\"']?\s*[=:]"
 )
 SPEC_YAML = re.compile(r"^(?:openapi|swagger|asyncapi)\s*:", re.MULTILINE)
 SPEC_JSON = re.compile(r'"(?:openapi|swagger|asyncapi)"\s*:')

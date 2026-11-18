@@ -188,6 +188,24 @@ class PythonTest(unittest.TestCase):
             """
         self.assertEqual(scan("m.py", src), [(6, "BFR-8", "requirement-id")])
 
+    def test_quoted_description_key_in_responses(self):
+        src = """\
+            @router.post(
+                "/v1/orders",
+                responses={
+                    409: {"description": "Duplicate (FR-9)."},
+                    422: {
+                        "description": (
+                            "Invalid amount, see FR-10."
+                        ),
+                    },
+                },
+            )
+            def create():
+                x = {"detail": "FR-11 stays internal"}
+            """
+        self.assertEqual(matches("m.py", src), ["FR-9", "FR-10"])
+
     def test_syntax_error_falls_back_to_metadata_only(self):
         src = 'def broken(:\n    """FR-1"""\nx = dict(description="FR-2")\n'
         self.assertEqual(matches("m.py", src), ["FR-2"])
