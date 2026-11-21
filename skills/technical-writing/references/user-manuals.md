@@ -2,7 +2,8 @@
 
 ## Choose the kind of page
 
-Keep these four kinds apart: a page that mixes them serves no reader well.
+Keep these four kinds apart: a page that mixes them serves no reader well. The structure of each kind, and of
+concept, quickstart, component and README pages: `doc-pages.md`.
 
 | Kind | Reader wants to | Shape |
 |---|---|---|
@@ -28,9 +29,8 @@ the user needs to plan around it.
 
 ## Voice
 
-- Second person ("you"), present tense, active voice.
-- The words of the product's UI and domain, used consistently. One term per concept.
-- Short sentences. No internal jargon, no "simply" or "just".
+Second person, present tense, active voice, the words of the product's UI, one term per concept, no internal
+jargon: `register.md`, which also covers Italian.
 
 ## Help and UI text
 
