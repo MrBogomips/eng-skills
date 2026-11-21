@@ -65,6 +65,5 @@ Never put constraint, table, column, class or host names, stack traces or SQL in
 
 ## Wording
 
-- Second person, present tense, active voice: "Returns the orders", "You can cancel...".
-- No marketing words ("seamless", "powerful", "robust") and no "simply" or "just".
-- One term per concept, the same as in the API names and the UI.
+Present tense, active voice ("Returns the orders", "You can cancel..."), one term per concept, the same as in the
+API names and the UI, no marketing words: `register.md`.

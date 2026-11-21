@@ -51,6 +51,16 @@ claude plugin eval . --scaffold --allow-tools Bash Write Edit --no-publish --tru
 Regex graders must target what the guidance forbids, not words a correct answer may also use (a rejected
 alternative named with its reason is not history).
 
+Eval grader syntax (not in `--help`):
+
+- `--case` takes `*` and `?` only: `[..]` and `{..}` match nothing. Run one case per call to select several.
+- Regex graders: flags go in `flags: "im"`; inline `(?i)` is rejected.
+- LLM graders read a file with `focus: {source: file, path: ...}`; `target:` is refused and `focus: files` shows
+  the judge only the paths.
+- One criterion per LLM grader, and `--judge-model sonnet` for judgments on content: compound criteria get
+  unstable votes. Prefer a regex when the rule is checkable.
+- `--keep-temp` keeps the traces: read the agent's real output before blaming the skill or the grader.
+
 ## Authoring skills
 
 Create and revise skills with the `superpowers:writing-skills` skill: write the eval or pressure test

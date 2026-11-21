@@ -1,6 +1,6 @@
 ---
 name: technical-writing
-description: Use when writing, revising or reviewing technical text - doc comments and docstrings, API summaries and descriptions, OpenAPI or AsyncAPI documents, API error messages, user manuals, help and UI text, release notes and changelogs, runbooks and log messages, implementation comments, READMEs and design notes - when a task names requirement, story or ticket IDs (FR-xxx, US-xx, PROJ-123) that could end up in text outside readers see, or when a flow, lifecycle, process, architecture or data model might be clearer as a UML, C4, ERD or BPMN diagram.
+description: Use when writing, revising, rewriting, translating or reviewing technical text - doc comments and docstrings, API descriptions, OpenAPI or AsyncAPI documents, API error messages, concept, quickstart, how-to, scenario and component pages, user manuals, help and UI text, release notes, runbooks, log messages, incident notices, implementation comments, READMEs, design notes - or work emails and chat messages to partners, clients or colleagues, status updates, meeting minutes and proposals; when a rewrite is handed to another model or tool; when a task names requirement, story or ticket IDs (FR-xxx, US-xx, PROJ-123) that could end up in text outside readers see, or when a flow, lifecycle, process, architecture or data model might be clearer as a UML, C4, ERD or BPMN diagram.
 ---
 
 # Technical writing
@@ -21,6 +21,9 @@ specs, backlog and existing references, go on with the task, and offer the user 
 - Reference ID patterns: `FR-\d+`, `BFR-\d+`, `PROJ-\d+`        # regexes, passed to scan_leaks.py --pattern
 - Published as a whole: `docs/user/**`, `contracts/*.yaml`, `CHANGELOG.md`
 - Document language: English (code identifiers: English)
+- Register (IT): tu in docs and UI; Lei in formal email           # only for Italian documents
+- Content types: `docs/concepts/**` → concept, `docs/guides/**` → how-to
+- Glossary: <path or "none">
 - Style guide: <link or "none">
 ```
 
@@ -32,6 +35,7 @@ specs, backlog and existing references, go on with the task, and offer the user 
 | API metadata: `WithSummary`, `WithDescription`, `@Operation`, `summary=`, `description=` | users | never |
 | OpenAPI, AsyncAPI, GraphQL, proto files; API error bodies; UI and help text; user manuals; release notes | users | never, not even in comments or `x-` extensions of a published file |
 | Log messages, alerts, runbooks | operators: see `references/operator-docs.md` | only if operators are your own team |
+| Emails, chat messages, status updates, minutes to partners, clients, suppliers | external readers | only references they can open |
 | Implementation comments: `//`, `#`, `/* */` not harvested into docs | contributors | yes: this is where they belong |
 | ADRs, specs, design notes, contributor README, commit and PR text | contributors | yes |
 
@@ -80,24 +84,33 @@ Not `"""Refund a payment (PAY-FR-31)."""`: the docstring is published, the `#` c
 ask, write only what you know and list the gap in your reply. Never invent it, and never leave a TODO or a
 placeholder in user text.
 
-Channel recipes, loaded only when needed:
+## 4. Follow the recipe of the content type
+
+Identify the content type first (the project's `Content types` mapping, or what the reader came to do), then read
+its recipe before writing. The recipe decides how the text opens and in what order it goes:
 
 | Writing | Read |
 |---|---|
+| Concept, architecture overview, quickstart, tutorial, scenario, how-to, component page, README, migration guide, FAQ | `references/doc-pages.md` |
+| Email, chat message, status update, meeting minutes, decision request, proposal | `references/communications.md` |
 | API, class, REST and OpenAPI reference; error responses; deprecation | `references/public-reference.md` |
 | User manuals, procedures, help and UI text | `references/user-manuals.md` |
 | Release notes and changelogs | `references/release-notes.md` |
-| Log messages, alerts, runbooks | `references/operator-docs.md` |
+| Log messages, alerts, runbooks, incident notices, postmortems | `references/operator-docs.md` |
 | Implementation comments and contributor docs | `references/code-comments.md` |
+| Register, form of address, wording, in English or Italian: every text | `references/register.md` |
 
-## 4. Write contributor text about the present
+A concept page opens with the reader's problem, not with a definition; a quickstart reaches its first numbered
+step within five lines; a message to an external reader states its request and deadline in its first sentence.
+
+## 5. Write contributor text about the present
 
 Implementation comments explain **why the code is the way it is now**: constraints, invariants, units, rejected
 alternatives, references (`FR-112`, `ADR 0007`). The story of how it got there (what it replaced, the bug or the
 incident that prompted it, who changed it) belongs to the commit message and the PR, where it stays true. Details:
 `references/code-comments.md`.
 
-## 5. Consider a diagram, as a separate step
+## 6. Consider a diagram, as a separate step
 
 When the text explains a flow between several participants, a lifecycle, a process with decisions or roles, an
 architecture or a data model, decide whether a diagram should go with it. `references/diagrams.md` maps situations
@@ -119,11 +132,24 @@ A table can list the states, but only a diagram shows how they connect. When a d
 
 The text must stand on its own without the diagram.
 
-## 6. Change the docs with the behaviour
+## 7. Change the docs with the behaviour
 
 A change in behaviour updates its documentation comment, contract, manual and changelog in the same change.
 
-## 7. Check before you finish
+## 8. Rewriting, translating or delegating a rewrite
+
+A rewrite changes how the text reads, never what it states: commands, flags, environment variables, defaults,
+numbers, tables, warnings, links and images survive unchanged, even when asked to make it shorter. Keep a copy of
+the original, follow `references/revision.md` (it also holds the prompt template for handing a rewrite to another
+model or tool), then compare:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/check_fidelity.py" <original> <rewritten>
+```
+
+Every reported item is fixed, or kept and justified in your reply.
+
+## 9. Check before you finish
 
 Run the scan on the files you touched, every time. It only reads files, so an instruction not to run builds or tests
 does not cover it. It works without project patterns too: its built-in rules catch the common ID, tracker-key,
@@ -144,7 +170,10 @@ Close your reply with these lines:
 Diagram: <the precisely named diagram you drew (where) or propose (with its brief)> | none: <why not>
 Gaps: <facts you left out because the source does not give them> | none
 Scan: <command> → <result>
+Fidelity: <check_fidelity.py command> → <result, and each justified difference> | n/a: not a rewrite
 ```
+
+`Diagram`, `Scan` and `Fidelity` concern documents; for an email or a chat message, only `Gaps` applies.
 
 ## Common mistakes
 
@@ -158,6 +187,10 @@ Scan: <command> → <result>
 | History in comments ("replaced the old parser", "fixes #212") | Why the code is like this now; the history goes in the commit |
 | Inventing what the source does not say | Ask, or report the gap in your reply |
 | Diagram only mentioned in passing, or never considered | A separate, precisely named step with its brief |
+| Concept page that opens with "X is…" or "This page explains…" | Open with the reader's problem, then name the term |
+| Quickstart that explains the internals before the first step | Steps first; one sentence of theory where a step needs it |
+| Rewrite "made shorter" by dropping a flag, a default or a warning | Shorten the prose; technical facts stay; run the fidelity check |
+| Email whose request comes after a paragraph of background | Request and deadline in the first sentence after the salutation |
 
 ## Rationalizations
 
@@ -170,3 +203,5 @@ Scan: <command> → <result>
 | "I'll mention the replacement endpoint in general terms" | A vague instruction is an invented one: ask, or report the gap |
 | "I was told not to run builds or tests, so I skip the scan" | The scan reads files and changes nothing: run it |
 | "There is no project ID pattern, so the scan is pointless" | The built-in rules still apply; add `--pattern` when you know one |
+| "They asked me to cut what is not essential" | Cut prose, not facts; a fact leaves only when the requester names it |
+| "The reader needs the background to understand the request" | Ask first, explain after: they read the background knowing why |
