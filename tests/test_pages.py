@@ -133,6 +133,59 @@ class PagesTest(unittest.TestCase):
         site = detect_pages(self.root, REMOTE)
         self.assertEqual(site.generator, "mkdocs")
 
+    def test_non_literal_config_values_ignored(self):
+        write(self.root, "docusaurus.config.js",
+              "module.exports = {\n  url: process.env.SITE_URL,\n"
+              "  baseUrl: process.env.BASE || '/',\n};\n")
+        self.assertEqual(detect_pages(self.root, REMOTE).base_url, "https://acme.github.io/widget/")
+        write(self.root, "_config.yml", "url: ${SITE}\nbaseurl: kit\n")
+        (self.root / "docusaurus.config.js").unlink()
+        self.assertEqual(detect_pages(self.root, REMOTE).base_url, "https://acme.github.io/widget/")
+
+    def test_single_line_js_and_nested_yaml_keys(self):
+        write(self.root, "docusaurus.config.js",
+              "module.exports = { url: 'https://a.io', baseUrl: '/w/' };\n")
+        self.assertEqual(detect_pages(self.root, None).base_url, "https://a.io/w/")
+        (self.root / "docusaurus.config.js").unlink()
+        write(self.root, "_config.yml", "author:\n  url: https://me.example\nurl: https://j.io\n")
+        self.assertEqual(detect_pages(self.root, None).base_url, "https://j.io/")
+
+    def test_docusaurus_only_docs_map_and_jekyll_readme(self):
+        write(self.root, "docusaurus.config.js", "module.exports = { url: 'https://a.io', baseUrl: '/' };\n")
+        site = detect_pages(self.root, None)
+        self.assertIsNone(page_url(site, "README.md"))
+        self.assertIsNone(page_url(site, "blog/x.md"))
+        self.assertEqual(page_url(site, "docs/intro.md"), "https://a.io/docs/intro")
+        (self.root / "docusaurus.config.js").unlink()
+        write(self.root, "_config.yml", "url: https://j.io\n")
+        site = detect_pages(self.root, None)
+        self.assertEqual(page_url(site, "README.md"), "https://j.io/README.html")
+        self.assertEqual(page_url(site, "index.md"), "https://j.io/")
+
+    def test_jekyll_docs_source_outside_returns_none(self):
+        write(self.root, "docs/_config.yml", "url: https://j.io\n")
+        site = detect_pages(self.root, None)
+        self.assertEqual(site.source_dir, "docs")
+        self.assertIsNone(page_url(site, "README.md"))
+        self.assertEqual(page_url(site, "docs/a.md"), "https://j.io/a.html")
+
+    def test_mkdocs_docs_dir_normalised_and_markdown_nav(self):
+        write(self.root, "mkdocs.yml", "docs_dir: ./manual\nnav:\n  - A: a.markdown\n")
+        site = detect_pages(self.root, None)
+        self.assertEqual(site.source_dir, "manual")
+        self.assertEqual(missing_from_nav(site, ["manual/a.markdown", "manual/b.md"]), ["manual/b.md"])
+
+    def test_cname_prefers_source_dir_then_root(self):
+        write(self.root, "CNAME", "root.example\n")
+        write(self.root, "docs/CNAME", "docs.example\n")
+        write(self.root, "docs/index.html", "x")
+        write(self.root, ".github/workflows/p.yml", "actions/deploy-pages\n")
+        self.assertEqual(detect_pages(self.root, None).base_url, "https://docs.example/")
+
+    def test_git_failure_gives_unknown_deploy(self):
+        write(self.root, "_config.yml", "title: x\n")
+        self.assertEqual(detect_pages(self.root, REMOTE).deploy, "unknown")
+
 
 if __name__ == "__main__":
     unittest.main()

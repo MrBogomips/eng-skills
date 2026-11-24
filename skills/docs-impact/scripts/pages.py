@@ -6,6 +6,7 @@ with line regexes, and anything unreadable falls back to defaults.
 
 from __future__ import annotations
 
+import posixpath
 import re
 import subprocess
 from dataclasses import dataclass
@@ -52,10 +53,23 @@ def _first(root: Path, names: list[str]) -> Path | None:
     return None
 
 
-def _key(text: str, name: str) -> str | None:
+def _yaml_key(text: str, name: str) -> str | None:
+    """Top-level YAML scalar (unindented key), quotes stripped, comment dropped."""
+    match = re.search(rf"^{name}\s*:[ \t]*(.*)$", text, re.M)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    quoted = re.match(r"""(['"])(.*?)\1""", value)
+    if quoted:
+        return quoted.group(2)
+    return value.split(" #", 1)[0].strip() or None
+
+
+def _js_key(text: str, name: str) -> str | None:
+    """A key whose value is a quoted string literal; expressions are ignored."""
     match = re.search(
-        rf"""^\s*['"]?{name}['"]?\s*[:=]\s*['"]?([^'"\s,#]+)""", text, re.M)
-    return match.group(1) if match else None
+        rf"""(?:^|[{{,;\s])['"]?{name}['"]?\s*:\s*(['"])([^'"\r\n]*)\1""", text)
+    return match.group(2) if match else None
 
 
 def _github_repo(remote_url: str | None) -> tuple[str, str] | None:
@@ -67,7 +81,7 @@ def _github_repo(remote_url: str | None) -> tuple[str, str] | None:
 
 
 def _cname_host(root: Path, source_dir: str) -> str | None:
-    for base in {root, root / source_dir}:
+    for base in (root / source_dir, root):
         host = _read(base / "CNAME").strip().split()
         if host:
             return host[0]
@@ -79,7 +93,9 @@ def _resolve_base(root: Path, source_dir: str, remote_url: str | None,
     """Generator config, then CNAME, then the owner.github.io fallback."""
     cname = _cname_host(root, source_dir)
     repo = _github_repo(remote_url)
-    path = cfg_path
+    if not (cfg_origin and re.match(r"^https?://[^/\s]+", cfg_origin)):
+        cfg_origin = None
+    path = cfg_path if cfg_path is not None and (cfg_path == "" or cfg_path.startswith("/")) else None
     if cfg_origin:
         origin = cfg_origin.rstrip("/")
     elif cname:
@@ -125,7 +141,7 @@ def _mkdocs_nav(text: str, docs_dir: str) -> tuple[str, ...] | None:
         if line.strip() and re.match(r"^\S", line) and not line.startswith("-"):
             break
         code = line.split("#", 1)[0]
-        for ref in re.findall(r"""([^\s'":\[\],]+\.md)\b""", code):
+        for ref in re.findall(r"""([^\s'":\[\],]+\.(?:md|markdown|mdx))\b""", code):
             entry = f"{docs_dir}/{ref}" if docs_dir else ref
             if entry not in found:
                 found.append(entry)
@@ -134,11 +150,12 @@ def _mkdocs_nav(text: str, docs_dir: str) -> tuple[str, ...] | None:
 
 def _detect_mkdocs(root: Path, cfg: Path, remote_url: str | None, deploy: str) -> PagesSite:
     text = _read(cfg)
-    docs_dir = (_key(text, "docs_dir") or "docs").strip("/") or "docs"
-    parts = urlsplit(_key(text, "site_url") or "")
+    docs_dir = posixpath.normpath(_yaml_key(text, "docs_dir") or "docs").strip("/")
+    docs_dir = "" if docs_dir == "." else docs_dir
+    parts = urlsplit(_yaml_key(text, "site_url") or "")
     origin = f"{parts.scheme}://{parts.netloc}" if parts.netloc else None
     base = _resolve_base(root, docs_dir, remote_url, origin, parts.path if origin else None)
-    flag = (_key(text, "use_directory_urls") or "true").lower()
+    flag = (_yaml_key(text, "use_directory_urls") or "true").lower()
     return PagesSite("mkdocs", docs_dir, base, deploy, _mkdocs_nav(text, docs_dir),
                      ("site/**",), str(root), flag != "false")
 
@@ -147,8 +164,8 @@ def _detect_jekyll(root: Path, cfg: Path, remote_url: str | None, deploy: str) -
     text = _read(cfg)
     source_dir = cfg.parent.relative_to(root).as_posix()
     source_dir = "" if source_dir == "." else source_dir
-    baseurl = _key(text, "baseurl")
-    base = _resolve_base(root, source_dir, remote_url, _key(text, "url"), baseurl)
+    baseurl = _yaml_key(text, "baseurl")
+    base = _resolve_base(root, source_dir, remote_url, _yaml_key(text, "url"), baseurl)
     return PagesSite("jekyll", source_dir, base, deploy, None, ("_site/**",), str(root))
 
 
@@ -166,7 +183,7 @@ def _docusaurus_nav(root: Path) -> tuple[str, ...] | None:
 
 def _detect_docusaurus(root: Path, cfg: Path, remote_url: str | None, deploy: str) -> PagesSite:
     text = _read(cfg)
-    base = _resolve_base(root, "", remote_url, _key(text, "url"), _key(text, "baseUrl"))
+    base = _resolve_base(root, "", remote_url, _js_key(text, "url"), _js_key(text, "baseUrl"))
     return PagesSite("docusaurus", "", base, deploy, _docusaurus_nav(root),
                      ("build/**", ".docusaurus/**"), str(root))
 
@@ -213,7 +230,7 @@ def _front_matter_permalink(site: PagesSite, rel_path: str) -> str | None:
     return found.group(1) if found else None
 
 
-def _stem_and_dir(rel: str) -> tuple[str, bool]:
+def _stem_and_dir(rel: str, readme_index: bool = True) -> tuple[str, bool]:
     """Strip the Markdown extension; flag index pages, which map to their directory."""
     stem = rel
     for ext in MD_EXTS:
@@ -222,7 +239,8 @@ def _stem_and_dir(rel: str) -> tuple[str, bool]:
             break
     else:
         return rel, False
-    if stem.rsplit("/", 1)[-1].lower() in ("index", "readme"):
+    names = ("index", "readme") if readme_index else ("index",)
+    if stem.rsplit("/", 1)[-1].lower() in names:
         return stem.rsplit("/", 1)[0] if "/" in stem else "", True
     return stem, False
 
@@ -232,7 +250,9 @@ def page_url(site: PagesSite, rel_path: str) -> str | None:
     rel = _relative(site, rel_path)
     if rel is None or not site.base_url:
         return None
-    stem, is_index = _stem_and_dir(rel)
+    if site.generator == "docusaurus" and not rel.startswith("docs/"):
+        return None
+    stem, is_index = _stem_and_dir(rel, site.generator != "jekyll")
     is_markdown = stem != rel or is_index
     if not is_markdown or site.generator == "static":
         return site.base_url + rel
