@@ -91,6 +91,42 @@ class SourceTest(unittest.TestCase):
         with self.assertRaises(SourceError):
             resolve_source(self.url, self.repo)
 
+    def test_option_like_ref_or_spec_rejected(self):
+        with self.assertRaises(SourceError):
+            resolve_source(self.url, self.repo, ref="--upload-pack=x")
+        with self.assertRaises(SourceError):
+            resolve_source("-u@h:x", self.repo)
+
+    def test_local_file_spec_raises(self):
+        with self.assertRaises(SourceError):
+            resolve_source(str(self.work / "guide.md"), self.repo)
+
+    def test_ref_with_local_path_warns(self):
+        res = resolve_source(str(self.work), self.repo, ref="main")
+        self.assertIn("ignored", res.warning)
+
+    def test_timeout_treated_as_unreachable(self):
+        orig = doc_source.subprocess.run
+
+        def slow(*a, **k):
+            if a[0][1] in ("clone", "fetch"):
+                raise doc_source.subprocess.TimeoutExpired(a[0], 1)
+            return orig(*a, **k)
+        doc_source.subprocess.run = slow
+        try:
+            with self.assertRaises(SourceError):
+                resolve_source(self.url, self.repo)
+        finally:
+            doc_source.subprocess.run = orig
+        first = resolve_source(self.url, self.repo)
+        doc_source.subprocess.run = slow
+        try:
+            res = resolve_source(self.url, self.repo)
+        finally:
+            doc_source.subprocess.run = orig
+        self.assertEqual(res.root, first.root)
+        self.assertIn("timed out", res.warning)
+
     def test_worktree_shares_common_dir_cache(self):
         run(GIT + ["worktree", "add", str(self.tmp / "wt"), "-b", "x"], self.repo)
         res = resolve_source(self.url, self.tmp / "wt")

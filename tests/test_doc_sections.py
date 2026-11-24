@@ -87,6 +87,28 @@ class FindDocFilesTest(unittest.TestCase):
         self.assertEqual(self.rel(root, found),
                          ["README.md", "docs/guide.md", "docs/sub/api.rst", "notes.md"])
 
+    def test_bom_first_line_heading_found(self):
+        root = self.make({"a.md": b"\xef\xbb\xbf# Title\nbody\n"})
+        secs = split_sections("a.md", doc_sections.read_doc(root / "a.md"))
+        self.assertEqual([s.anchor for s in secs], ["title"])
+
+    def test_excluded_dirs_are_not_walked(self):
+        root = self.make({"README.md": "x", "node_modules/a/README.md": "x"})
+        import os
+        seen = []
+        real = os.walk
+
+        def spy(top):
+            for d, dirs, files in real(top):
+                yield d, dirs, files
+                seen.extend(dirs)
+        orig, doc_sections.os.walk = doc_sections.os.walk, spy
+        try:
+            doc_sections.find_doc_files(root, DEFAULT_DOC_GLOBS, DEFAULT_EXCLUDES)
+        finally:
+            doc_sections.os.walk = orig
+        self.assertNotIn("node_modules", seen)
+
     def test_custom_globs(self):
         root = self.make({"a/b/c.md": "x", "top.md": "x"})
         found = doc_sections.find_doc_files(root, ["**/*.md"], [])

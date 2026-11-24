@@ -5,6 +5,7 @@ All paths are POSIX and relative to the docs root.
 
 from __future__ import annotations
 
+import functools
 import html
 import os
 import re
@@ -32,6 +33,7 @@ class Section:
 
 # ---------------------------------------------------------------- file discovery
 
+@functools.lru_cache(maxsize=None)
 def _glob_regex(glob: str) -> re.Pattern:
     out, i = [], 0
     while i < len(glob):
@@ -63,6 +65,12 @@ def _matches(rel: str, glob: str, anywhere: bool) -> bool:
     return bool(_glob_regex("**/" + glob).match(rel))
 
 
+def _dir_excluded(parent: str, name: str, excludes: list[str]) -> bool:
+    """True when a `dir/**` exclude covers everything below this directory."""
+    rel = name if parent == "." else f"{parent}/{name}"
+    return any(g.endswith("/**") and _matches(rel + "/_", g, True) for g in excludes)
+
+
 def find_doc_files(root: Path, globs: list[str], excludes: list[str]) -> list[Path]:
     """Doc files under root matching any glob and no exclude, sorted by POSIX path.
 
@@ -70,7 +78,11 @@ def find_doc_files(root: Path, globs: list[str], excludes: list[str]) -> list[Pa
     """
     found: list[tuple[str, Path]] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in PRUNED_DIRS)
+        here = Path(dirpath).relative_to(root).as_posix()
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in PRUNED_DIRS and not _dir_excluded(here, d, excludes)
+        )
         for name in filenames:
             path = Path(dirpath) / name
             if path.suffix.lower() not in DOC_EXTENSIONS:
@@ -84,14 +96,14 @@ def find_doc_files(root: Path, globs: list[str], excludes: list[str]) -> list[Pa
 
 
 def read_doc(path: Path) -> str | None:
-    """File text decoded as UTF-8 with replacement; None for binaries and unreadable files."""
+    """File text decoded as UTF-8 (BOM dropped) with replacement; None for binaries and unreadable files."""
     try:
         data = path.read_bytes()
     except OSError:
         return None
     if b"\x00" in data[:8192]:
         return None
-    return data.decode("utf-8", errors="replace")
+    return data.decode("utf-8-sig", errors="replace")
 
 
 # ---------------------------------------------------------------- headings
