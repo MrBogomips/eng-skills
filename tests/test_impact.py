@@ -33,6 +33,20 @@ class MatchTest(unittest.TestCase):
         result = match(terms, [sec("Pass --out to set the folder.")], [], [])
         self.assertEqual((result[0].adjustment, result[0].confidence), ("update", "high"))
 
+    def test_rename_and_removal_in_one_section_give_two_impacts(self):
+        terms = [term("--out"), term("--output-dir", change="added", line=11),
+                 term("OLD_ENV", kind="env", line=40)]
+        result = match(terms, [sec("Pass --out. Set OLD_ENV too.")], [], [])
+        by_adj = {i.adjustment: i for i in result}
+        self.assertEqual(set(by_adj), {"update", "obsolete"})
+        self.assertEqual([t.text for t in by_adj["update"].terms], ["--out", "--output-dir"][:1])
+        self.assertEqual([t.text for t in by_adj["obsolete"].terms], ["OLD_ENV"])
+
+    def test_added_half_of_reported_rename_not_undocumented(self):
+        terms = [term("--out"), term("--output-dir", change="added", line=11)]
+        self.assertEqual(undocumented(terms, [sec("Pass --out.")]), [])
+        self.assertEqual(len(undocumented(terms, [sec("nothing")])), 1)
+
     def test_flag_not_matched_inside_longer_flag(self):
         result = match([term("--out")], [sec("Only --output-dir exists.")], [], [])
         self.assertEqual(result, [])
@@ -71,7 +85,8 @@ class MatchTest(unittest.TestCase):
         terms = [term("--legacy"), term("timeout", "config_key", "changed")]
         sections = [sec("timeout", anchor="a"), sec("--legacy and timeout", anchor="b")]
         result = match(terms, sections, [], [], url_for=lambda s: f"u/{s.anchor}")
-        self.assertEqual([i.section.anchor for i in result], ["b", "a"])
+        self.assertEqual([(i.section.anchor, i.adjustment) for i in result],
+                         [("b", "obsolete"), ("a", "update"), ("b", "update")])
         self.assertEqual(result[0].url, "u/b")
 
     def test_undocumented_added_flag(self):
@@ -88,13 +103,15 @@ class MatchTest(unittest.TestCase):
 
 
 def base_report(**over):
-    imp = match([term("--legacy")], [sec("Use --legacy.")], [], [("M", "docs/usage.md", None)])
+    imp = match([term("--legacy")], [sec("Use --legacy.")], [], [])
+    done = match([term("--legacy")], [sec("Use --legacy.", path="docs/old.md")], [],
+                 [("M", "docs/old.md", None)])
     report = {
         "base": "main", "head": "HEAD", "diffstat": "1 file changed",
         "source": {"origin": "repo", "root": "/r", "warning": None},
-        "pages": None, "warnings": [], "impacts": imp, "omitted": 0,
+        "pages": None, "warnings": [], "impacts": imp, "updated": done, "omitted": 0,
         "undocumented": [term("--new", change="added")],
-        "navigation": ["docs/new.md"], "nav_note": None,
+        "navigation": [{"path": "docs/new.md", "url": None}], "nav_note": None,
         "mappings": [], "changed": [("M", "docs/usage.md", None)],
     }
     report.update(over)
@@ -110,10 +127,13 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertIn("docs/usage.md#usage", text)
         self.assertIn("src/cli.py:10", text)
+        self.assertIn("- docs/old.md#usage (obsolete)", text)
+        self.assertNotIn("docs/old.md#usage |", text)
+        self.assertNotIn("open docs/old.md", text)
         self.assertTrue(text.rstrip().endswith("3 impacts omitted (--max-impacts)"))
 
     def test_render_md_empty(self):
-        text = render(base_report(impacts=[], undocumented=[], navigation=[]), "md")
+        text = render(base_report(impacts=[], undocumented=[], navigation=[], updated=[]), "md")
         self.assertIn("No documentation impact found.", text)
 
     def test_render_json_roundtrip(self):
@@ -121,7 +141,8 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(data["impacts"][0]["path"], "docs/usage.md")
         self.assertEqual(data["impacts"][0]["terms"][0]["text"], "--legacy")
         self.assertEqual(data["undocumented"][0]["text"], "--new")
-        self.assertEqual(data["navigation"], ["docs/new.md"])
+        self.assertEqual(data["navigation"], [{"path": "docs/new.md", "url": None}])
+        self.assertEqual(data["updated"][0]["path"], "docs/old.md")
 
     def test_render_rejects_unknown_format(self):
         with self.assertRaises(ValueError):

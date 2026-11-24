@@ -54,7 +54,6 @@ class CliTest(unittest.TestCase):
         self.assertIn("update", out)
         self.assertIn("--fresh", out)
         self.assertIn("## Review context", out)
-        print("\n" + out)
 
     def test_cli_no_impact_exit_0(self):
         self.seed()
@@ -85,10 +84,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.run_cli("--max-impacts", "-1").returncode, 2)
 
     def test_cli_out_file_and_max_impacts(self):
-        self.seed()
         self.write("docs/second.md", "# Second\n\nAlso --out here.\n")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "more docs")
+        self.seed()
         self.write("src/cli.py", 'parser.add_argument("--output-dir")\n')
         self.commit("rename")
         target = self.repo / "report-out.md"
@@ -109,6 +106,31 @@ class CliTest(unittest.TestCase):
         self.assertIn("https://docs.example.org/w/usage/#usage", out)
         off = self.run_cli("--pages", "off").stdout
         self.assertNotIn("docs.example.org", off)
+
+    def test_cli_nav_lists_page_url(self):
+        self.write("mkdocs.yml", "site_name: P\nsite_url: https://example.github.io/pixkit/\nnav:\n  - Home: index.md\n")
+        self.write("docs/index.md", "# Home\n")
+        self.commit("base")
+        self.git("checkout", "-q", "-b", "feature/x")
+        self.write("docs/guides/batch.md", "# Batch\n")
+        self.commit("add page")
+        out = self.run_cli().stdout
+        self.assertIn("docs/guides/batch.md https://example.github.io/pixkit/guides/batch/", out)
+        nav = json.loads(self.run_cli("--format", "json").stdout)["navigation"]
+        self.assertEqual(nav, [{"path": "docs/guides/batch.md",
+                                "url": "https://example.github.io/pixkit/guides/batch/"}])
+
+    def test_cli_updated_sections_leave_impacts(self):
+        self.seed()
+        self.write("src/cli.py", 'parser.add_argument("--output-dir")\n')
+        self.write("docs/usage.md", "# Usage\n\nPass --out to choose the folder.\nEdited.\n")
+        self.commit("rename and touch doc")
+        out = self.run_cli("--format", "md").stdout
+        impacts = out.split("## Impacts")[1].split("## ")[0]
+        self.assertNotIn("docs/usage.md", impacts)
+        updated = out.split("## Already updated in this branch")[1].split("## ")[0]
+        self.assertIn("docs/usage.md#usage (update)", updated)
+        self.assertNotIn("docs/usage.md", out.split("## Review context")[1])
 
     def test_main_in_process_writes_out_file(self):
         sys.path.insert(0, str(CLI.parent))

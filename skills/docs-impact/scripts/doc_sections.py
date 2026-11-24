@@ -55,7 +55,7 @@ def _glob_regex(glob: str) -> re.Pattern:
     return re.compile("".join(out) + r"\Z")
 
 
-def _matches(rel: str, glob: str, anywhere: bool) -> bool:
+def matches_glob(rel: str, glob: str, anywhere: bool) -> bool:
     if _glob_regex(glob).match(rel):
         return True
     if not anywhere:
@@ -68,7 +68,7 @@ def _matches(rel: str, glob: str, anywhere: bool) -> bool:
 def _dir_excluded(parent: str, name: str, excludes: list[str]) -> bool:
     """True when a `dir/**` exclude covers everything below this directory."""
     rel = name if parent == "." else f"{parent}/{name}"
-    return any(g.endswith("/**") and _matches(rel + "/_", g, True) for g in excludes)
+    return any(g.endswith("/**") and matches_glob(rel + "/_", g, True) for g in excludes)
 
 
 def find_doc_files(root: Path, globs: list[str], excludes: list[str]) -> list[Path]:
@@ -88,8 +88,8 @@ def find_doc_files(root: Path, globs: list[str], excludes: list[str]) -> list[Pa
             if path.suffix.lower() not in DOC_EXTENSIONS:
                 continue
             rel = path.relative_to(root).as_posix()
-            if any(_matches(rel, g, False) for g in globs) and not any(
-                _matches(rel, g, True) for g in excludes
+            if any(matches_glob(rel, g, False) for g in globs) and not any(
+                matches_glob(rel, g, True) for g in excludes
             ):
                 found.append((rel, path))
     return [p for _, p in sorted(found)]

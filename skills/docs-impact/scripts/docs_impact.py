@@ -7,19 +7,17 @@ exit 2 with a one-line stderr message on bad arguments, git or source failures.
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from diff_terms import GitError, changed_files, extract_terms
+from diff_terms import GitError, changed_files, extract_terms, run_git
 from doc_sections import DEFAULT_DOC_GLOBS, DEFAULT_EXCLUDES, Section, find_doc_files, read_doc, split_sections
 from doc_source import SourceError, resolve_source
 from impact import match, parse_mappings, undocumented
 from pages import PagesSite, detect_pages, missing_from_nav, page_url
 from report import render
 
-GIT_TIMEOUT = 60
 DEFAULT_MAX_IMPACTS = 50
 
 
@@ -27,19 +25,16 @@ class UsageError(Exception):
     """Bad arguments or an unresolvable ref; reported as one line with exit status 2."""
 
 
-def _git(repo: Path, *args: str) -> tuple[int, str]:
+def _git_ok(repo: Path, *args: str) -> str | None:
+    """Stdout of a git command, or None when it fails."""
     try:
-        proc = subprocess.run(
-            ["git", *args], cwd=str(repo), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=GIT_TIMEOUT,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise GitError(f"cannot run git: {exc}") from exc
-    return proc.returncode, proc.stdout.strip()
+        return run_git(repo, *args).strip()
+    except GitError:
+        return None
 
 
 def _resolves(repo: Path, ref: str) -> bool:
-    return _git(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", ref + "^{commit}")[0] == 0
+    return _git_ok(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", ref + "^{commit}") is not None
 
 
 def resolve_base(repo: Path, requested: str | None) -> str:
@@ -47,8 +42,8 @@ def resolve_base(repo: Path, requested: str | None) -> str:
     if requested is not None:
         candidates = [requested]
     else:
-        code, target = _git(repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
-        candidates = ([target.replace("refs/remotes/", "", 1)] if code == 0 and target else [])
+        target = _git_ok(repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
+        candidates = [target.replace("refs/remotes/", "", 1)] if target else []
         candidates += ["main", "master"]
     for ref in candidates:
         if _resolves(repo, ref):
@@ -58,16 +53,11 @@ def resolve_base(repo: Path, requested: str | None) -> str:
 
 
 def _diffstat(repo: Path, base: str, head: str) -> str:
-    code, out = _git(repo, "diff", "--shortstat", "--end-of-options", f"{base}...{head}")
-    return out if code == 0 else ""
+    return _git_ok(repo, "diff", "--shortstat", "--end-of-options", f"{base}...{head}") or ""
 
 
 def _remote_url(root: Path) -> str | None:
-    try:
-        code, out = _git(root, "remote", "get-url", "origin")
-    except GitError:
-        return None
-    return (out or None) if code == 0 else None
+    return _git_ok(root, "remote", "get-url", "origin") or None
 
 
 def _load_sections(root: Path, globs: list[str], excludes: list[str]) -> list[Section]:
@@ -85,13 +75,13 @@ def _pages_view(site: PagesSite | None) -> dict | None:
     return {k: v for k, v in asdict(site).items() if k not in ("root", "nav_files")}
 
 
-def _nav_check(site: PagesSite | None, in_repo: bool, changed: list) -> tuple[list[str], str | None]:
+def _nav_check(site: PagesSite | None, in_repo: bool, changed: list) -> tuple[list[dict], str | None]:
     if site is None:
         return [], None
     if not in_repo:
         return [], "navigation check skipped: documentation source is not this repository"
     new_docs = [p for s, p, _ in changed if s in ("A", "R")]
-    return missing_from_nav(site, new_docs), None
+    return [{"path": p, "url": page_url(site, p)} for p in missing_from_nav(site, new_docs)], None
 
 
 def _url_for(site: PagesSite | None):
@@ -118,8 +108,9 @@ def build_report(args: argparse.Namespace) -> dict:
     sections = _load_sections(source.root, args.docs or DEFAULT_DOC_GLOBS, excludes)
     terms = extract_terms(repo, base, args.head)
     changed = changed_files(repo, base, args.head)
-    impacts = match(terms, sections, mappings, changed, docs_in_repo=in_repo,
-                    url_for=_url_for(site))
+    found = match(terms, sections, mappings, changed, docs_in_repo=in_repo,
+                  url_for=_url_for(site))
+    impacts = [i for i in found if not i.updated_in_branch]
     navigation, nav_note = _nav_check(site, in_repo, changed)
     warnings = [] if in_repo else ["external documentation source: updated-in-branch detection is off"]
     return {
@@ -127,6 +118,7 @@ def build_report(args: argparse.Namespace) -> dict:
         "source": {"origin": source.origin, "root": source.root.as_posix(), "warning": source.warning},
         "pages": _pages_view(site), "warnings": warnings,
         "impacts": impacts[: args.max_impacts], "omitted": max(0, len(impacts) - args.max_impacts),
+        "updated": [i for i in found if i.updated_in_branch],
         "undocumented": undocumented(terms, sections), "navigation": navigation,
         "nav_note": nav_note, "mappings": mappings, "changed": changed,
     }

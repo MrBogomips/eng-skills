@@ -14,6 +14,7 @@ STOPLIST = frozenset(
     {"main", "init", "test", "data", "name", "value", "self", "args", "none", "true", "false"}
 )
 MIN_LENGTH = 4
+GIT_TIMEOUT = 120
 # Generic words that say nothing about a public contract when they are config keys.
 CONFIG_KEY_STOPLIST = frozenset(
     {"version", "description", "resolved", "integrity", "dependencies", "type"}
@@ -211,13 +212,15 @@ def _header_line(state: _FileState, raw: str, rename_from: str | None) -> str | 
     return rename_from
 
 
-def _git(repo: Path, *args: str) -> str:
+def run_git(repo: Path, *args: str) -> str:
+    """Stdout of a git command in repo; GitError on failure or timeout."""
     cmd = ["git", "-c", "core.quotepath=off", *args]
     try:
         proc = subprocess.run(
-            cmd, cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace"
+            cmd, cwd=str(repo), capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=GIT_TIMEOUT,
         )
-    except OSError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         raise GitError(f"cannot run git: {exc}") from exc
     if proc.returncode != 0:
         raise GitError(proc.stderr.strip() or f"git exited with {proc.returncode}")
@@ -225,7 +228,7 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def extract_terms(repo: Path, base: str, head: str = "HEAD") -> list[Term]:
-    out = _git(
+    out = run_git(
         repo, "diff", "--unified=0", "-M", "--no-color", "--no-ext-diff", "--no-textconv",
         "--src-prefix=a/", "--dst-prefix=b/", "--end-of-options", f"{base}...{head}",
     )
@@ -236,7 +239,7 @@ def changed_files(
     repo: Path, base: str, head: str = "HEAD"
 ) -> list[tuple[str, str, str | None]]:
     """Return (status, path, old_path) per changed file; old_path only for renames and copies."""
-    out = _git(repo, "diff", "--name-status", "-M", "--end-of-options", f"{base}...{head}")
+    out = run_git(repo, "diff", "--name-status", "-M", "--end-of-options", f"{base}...{head}")
     files: list[tuple[str, str, str | None]] = []
     for line in out.splitlines():
         parts = line.split("\t")

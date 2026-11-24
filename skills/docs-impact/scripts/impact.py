@@ -7,15 +7,13 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from diff_terms import Term
-from doc_sections import Section, _matches
+from doc_sections import Section, matches_glob
 
 ADJUSTMENTS = ("update", "obsolete", "check")
 CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
 UNDOCUMENTED_KINDS = frozenset({"symbol", "flag", "env", "route"})
 IDENTIFIER_KINDS = frozenset({"symbol", "env", "config_key"})
 RENAME_WINDOW = 3
-
-Changed = "list[tuple[str, str, str | None]]"
 
 
 @dataclass(frozen=True)
@@ -48,14 +46,13 @@ def _pattern(term: Term) -> re.Pattern:
     return re.compile(rf"{lead}{text}(?![A-Za-z0-9_-])")
 
 
-def _rename_pairs(terms: Iterable[Term]) -> set[Term]:
-    """Terms taking part in a rename: removed and added, same kind and file, lines close."""
+def _rename_partners(terms: Iterable[Term]) -> dict[Term, Term]:
+    """Map both halves of each rename (removed and added, same kind and file, lines close)."""
     terms = list(terms)
-    removed = [t for t in terms if t.change == "removed"]
     added = [t for t in terms if t.change == "added"]
     used: set[int] = set()
-    paired: set[Term] = set()
-    for old in removed:
+    partners: dict[Term, Term] = {}
+    for old in (t for t in terms if t.change == "removed"):
         best = None
         for idx, new in enumerate(added):
             if idx in used or new.kind != old.kind or new.file != old.file:
@@ -65,19 +62,21 @@ def _rename_pairs(terms: Iterable[Term]) -> set[Term]:
                 best = (gap, idx)
         if best:
             used.add(best[1])
-            paired.update((old, added[best[1]]))
-    return paired
+            partners[old], partners[added[best[1]]] = added[best[1]], old
+    return partners
 
 
-def _classify(hits: list[Term], renamed: set[Term]) -> tuple[str, str] | None:
-    """Obsolete outranks a rename, which outranks a plain change."""
-    if any(t.change == "removed" and t not in renamed for t in hits):
-        return "obsolete", "high"
-    if any(t in renamed for t in hits):
-        return "update", "high"
-    if any(t.change == "changed" for t in hits):
-        return "update", "medium"
-    return None
+def _groups(hits: list[Term], renamed: set[Term]) -> list[tuple[str, str, list[Term]]]:
+    """Hits split by what they imply: obsolete (unpaired removal), rename or change (update)."""
+    obsolete = [t for t in hits if t.change == "removed" and t not in renamed]
+    rename = [t for t in hits if t in renamed]
+    changed = [t for t in hits if t.change == "changed"]
+    groups: list[tuple[str, str, list[Term]]] = []
+    if obsolete:
+        groups.append(("obsolete", "high", obsolete))
+    if rename or changed:
+        groups.append(("update", "high" if rename else "medium", rename + changed))
+    return groups
 
 
 def declared_code_files(
@@ -86,9 +85,9 @@ def declared_code_files(
     """Changed files that a declared mapping ties to the documentation file."""
     files: list[str] = []
     for code_glob, doc_glob in mappings:
-        if not _matches(section_path, doc_glob, False):
+        if not matches_glob(section_path, doc_glob, False):
             continue
-        files.extend(p for _, p, _ in changed if _matches(p, code_glob, False) and p not in files)
+        files.extend(p for _, p, _ in changed if matches_glob(p, code_glob, False) and p not in files)
     return files
 
 
@@ -102,32 +101,31 @@ def match(
     url_for: Callable[[Section], str | None] | None = None,
 ) -> list[Impact]:
     """Impacts ranked by confidence, then number of terms. Matching is case-sensitive."""
-    renamed = _rename_pairs(terms)
+    renamed = set(_rename_partners(terms))
     patterns = [(t, _pattern(t)) for t in terms]
     changed_docs = {p for _, p, _ in changed} if docs_in_repo else set()
     impacts: list[Impact] = []
     for section in sections:
         hits = [t for t, rx in patterns if rx.search(section.text)]
-        kind = _classify(hits, renamed)
+        groups = _groups(hits, renamed)
         declared = bool(declared_code_files(section.path, mappings, changed))
-        if kind is None and not declared:
-            continue
-        if kind is None:
-            kind = ("check", "low")
-        elif declared:
-            kind = (kind[0], "high")
-        used = tuple(t for t in hits if t.change != "added" or t in renamed)
-        impacts.append(Impact(
-            section, used, declared, kind[0], kind[1],
-            url_for(section) if url_for else None, section.path in changed_docs,
-        ))
+        if not groups and declared:
+            groups = [("check", "low", [])]
+        url = url_for(section) if url_for else None
+        for adjustment, confidence, used in groups:
+            impacts.append(Impact(
+                section, tuple(used), declared, adjustment,
+                "high" if declared and used else confidence, url,
+                section.path in changed_docs,
+            ))
     impacts.sort(key=lambda i: (
         CONFIDENCE_RANK[i.confidence], -len(i.terms), i.section.path, i.section.start_line))
     return impacts
 
 
 def undocumented(terms: list[Term], sections: list[Section]) -> list[Term]:
-    """Added public terms that no documentation section mentions."""
+    """Added public terms that no section mentions, except the new half of a reported rename."""
+    partners = _rename_partners(terms)
     found: list[Term] = []
     seen: set[tuple[str, str]] = set()
     for term in terms:
@@ -135,7 +133,8 @@ def undocumented(terms: list[Term], sections: list[Section]) -> list[Term]:
         if term.change != "added" or term.kind not in UNDOCUMENTED_KINDS or key in seen:
             continue
         seen.add(key)
-        rx = _pattern(term)
-        if not any(rx.search(s.text) for s in sections):
-            found.append(term)
+        if not any(_pattern(term).search(s.text) for s in sections):
+            old = partners.get(term)
+            if old is None or not any(_pattern(old).search(s.text) for s in sections):
+                found.append(term)
     return found

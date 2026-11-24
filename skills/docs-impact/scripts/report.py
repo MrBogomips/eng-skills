@@ -33,7 +33,9 @@ def _code_files(imp: Impact, report: dict) -> list[str]:
 
 
 def _json_view(report: dict) -> dict:
-    view = {k: v for k, v in report.items() if k not in ("impacts", "undocumented", "mappings", "changed")}
+    skip = ("impacts", "updated", "undocumented", "mappings", "changed")
+    view = {k: v for k, v in report.items() if k not in skip}
+    view["updated"] = [_impact_dict(i, _code_files(i, report)) for i in report.get("updated", [])]
     view["impacts"] = [_impact_dict(i, _code_files(i, report)) for i in report["impacts"]]
     view["undocumented"] = [_term_dict(t) for t in report["undocumented"]]
     return view
@@ -88,18 +90,18 @@ def _navigation_md(report: dict) -> list[str]:
     if not report["navigation"] and not note:
         return []
     lines = ["## Navigation", ""]
-    lines += [f"- not in navigation: {p}" for p in report["navigation"]]
+    lines += [f"- not in navigation: {p['path']} {p['url'] or '—'}" for p in report["navigation"]]
     if note:
         lines.append(f"- {note}")
     return lines + [""]
 
 
 def _updated_md(report: dict) -> list[str]:
-    done = [i for i in report["impacts"] if i.updated_in_branch]
+    done = report.get("updated", [])
     lines = ["## Already updated in this branch", ""]
     if not done:
         return lines + ["None.", ""]
-    return lines + [f"- {i.section.path}#{i.section.anchor}" for i in done] + [""]
+    return lines + [f"- {i.section.path}#{i.section.anchor} ({i.adjustment})" for i in done] + [""]
 
 
 def _context_md(report: dict) -> list[str]:
