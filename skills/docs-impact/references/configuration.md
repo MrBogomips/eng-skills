@@ -10,7 +10,7 @@ The first line is an existing key of the section; the other three belong to this
 
 ```markdown
 ## Documentation
-- Published as a whole: `README.md`, `docs/**`, `openapi/*.yaml`
+- Published as a whole: `README.md`, `docs/**`, `guides/*.md`
 - Docs source: https://github.com/example/payments-docs.git@main
 - Docs impact map: `src/refunds/**` => `docs/api/refunds.md`
 - Docs impact map: `src/webhooks/**` => `docs/guides/webhooks/**`
@@ -23,6 +23,10 @@ The first line is an existing key of the section; the other three belong to this
 | `Docs source:` | Where the documentation lives when it is not this repository: a local path or a git URL, optionally `@<ref>` | `--source <path or URL>`, `--source-ref <ref>` |
 | `Docs impact map:` | A code area and the pages that document it; repeat the key for each pair | `--map "<code glob> => <doc glob>"` |
 | `Docs pages: off` | Skip GitHub Pages detection, URLs and the navigation check | `--pages off` |
+
+Only documentation formats are scanned: Markdown/MDX, reStructuredText, AsciiDoc and HTML. Files of any other
+format that match a glob (for example an OpenAPI `*.yaml`) are skipped, and changelogs are excluded by default. With
+`Docs source:` the globs (`--docs` and the doc globs of `--map`) are relative to the source root.
 
 Without `Published as a whole:` the doc set is `README*`, `docs/**`, `doc/**` and top-level `*.md`. Changelogs and
 build output (`node_modules/`, `_site/`, `site/`, `build/`, `.docusaurus/`) are always excluded; add more exclusions

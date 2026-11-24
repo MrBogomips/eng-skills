@@ -11,7 +11,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from diff_terms import GitError, changed_files, extract_terms, run_git
+from diff_terms import GitError, changed_files, doc_hunks, extract_terms, run_git
 from doc_sections import DEFAULT_DOC_GLOBS, DEFAULT_EXCLUDES, Section, find_doc_files, read_doc, split_sections
 from doc_source import SourceError, resolve_source
 from impact import match, parse_mappings, undocumented
@@ -60,9 +60,13 @@ def _remote_url(root: Path) -> str | None:
     return _git_ok(root, "remote", "get-url", "origin") or None
 
 
-def _load_sections(root: Path, globs: list[str], excludes: list[str]) -> list[Section]:
+def _load_sections(
+    root: Path, globs: list[str], excludes: list[str], skip: frozenset[Path] = frozenset()
+) -> list[Section]:
     sections: list[Section] = []
     for path in find_doc_files(root, globs, excludes):
+        if path.resolve() in skip:
+            continue
         text = read_doc(path)
         if text is not None:
             sections.extend(split_sections(path.relative_to(root).as_posix(), text))
@@ -105,11 +109,13 @@ def build_report(args: argparse.Namespace) -> dict:
     in_repo = source.origin == "repo"
     site = detect_pages(source.root, _remote_url(source.root)) if args.pages == "auto" else None
     excludes = DEFAULT_EXCLUDES + args.exclude + (list(site.excludes) if site else [])
-    sections = _load_sections(source.root, args.docs or DEFAULT_DOC_GLOBS, excludes)
+    skip = frozenset({Path(args.out).resolve()}) if args.out else frozenset()
+    sections = _load_sections(source.root, args.docs or DEFAULT_DOC_GLOBS, excludes, skip)
     terms = extract_terms(repo, base, args.head)
     changed = changed_files(repo, base, args.head)
     found = match(terms, sections, mappings, changed, docs_in_repo=in_repo,
-                  url_for=_url_for(site))
+                  url_for=_url_for(site),
+                  hunks=doc_hunks(repo, base, args.head, changed) if in_repo else None)
     impacts = [i for i in found if not i.updated_in_branch]
     navigation, nav_note = _nav_check(site, in_repo, changed)
     warnings = [] if in_repo else ["external documentation source: updated-in-branch detection is off"]

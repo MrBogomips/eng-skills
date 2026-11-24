@@ -254,7 +254,9 @@ def page_url(site: PagesSite, rel_path: str) -> str | None:
         return None
     stem, is_index = _stem_and_dir(rel, site.generator != "jekyll")
     is_markdown = stem != rel or is_index
-    if not is_markdown or site.generator == "static":
+    if site.generator == "static":
+        return site.base_url + rel if rel.lower().endswith((".html", ".htm")) else None
+    if not is_markdown:
         return site.base_url + rel
     if site.generator == "jekyll":
         link = _front_matter_permalink(site, rel_path.lstrip("/"))

@@ -49,7 +49,7 @@ Page URL, for `docs/api/refunds.md` on a site with base `https://example.github.
 | MkDocs, `use_directory_urls: false` | `https://example.github.io/payments/api/refunds.html` |
 | Docusaurus | `https://example.github.io/payments/docs/api/refunds` |
 | Jekyll | `https://example.github.io/payments/docs/api/refunds.html`, or the page's `permalink` |
-| Static | `https://example.github.io/payments/api/refunds.md` (files are served as they are) |
+| Static | `https://example.github.io/payments/api/refunds.html` for `.html`/`.htm` sources only; any other format has no URL |
 
 `index.md`, and `README.md` outside Jekyll, map to their directory. Section rows add `#anchor`.
 

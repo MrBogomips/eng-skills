@@ -66,6 +66,30 @@ def _rename_partners(terms: Iterable[Term]) -> dict[Term, Term]:
     return partners
 
 
+def _moved_keys(terms: Iterable[Term]) -> set[tuple[str, str]]:
+    """(kind, text) pairs both removed and added in the diff: code moved, not gone."""
+    removed = {(t.kind, t.text) for t in terms if t.change == "removed"}
+    return removed & {(t.kind, t.text) for t in terms if t.change == "added"}
+
+
+def _without_moves(terms: list[Term]) -> list[Term]:
+    moved = _moved_keys(terms)
+    return [t for t in terms
+            if not (t.change in ("removed", "added") and (t.kind, t.text) in moved)]
+
+
+def _is_updated(
+    section: Section, changed: list, hunks: dict[str, list[tuple[int, int]]] | None
+) -> bool:
+    """A section the branch edits: its lines overlap a hunk; every section of an added file."""
+    if hunks is None:
+        return section.path in {p for _, p, _ in changed}
+    if any(st == "A" and p == section.path for st, p, _ in changed):
+        return True
+    return any(a <= section.end_line and b >= section.start_line
+               for a, b in hunks.get(section.path, []))
+
+
 def _groups(hits: list[Term], renamed: set[Term]) -> list[tuple[str, str, list[Term]]]:
     """Hits split by what they imply: obsolete (unpaired removal), rename or change (update)."""
     obsolete = [t for t in hits if t.change == "removed" and t not in renamed]
@@ -99,11 +123,16 @@ def match(
     *,
     docs_in_repo: bool = True,
     url_for: Callable[[Section], str | None] | None = None,
+    hunks: dict[str, list[tuple[int, int]]] | None = None,
 ) -> list[Impact]:
-    """Impacts ranked by confidence, then number of terms. Matching is case-sensitive."""
+    """Impacts ranked by confidence, then number of terms. Matching is case-sensitive.
+
+    ``hunks`` (new-side ranges per doc file) makes "updated in branch" per section; without
+    it a section counts as updated when its file changed.
+    """
+    terms = _without_moves(terms)
     renamed = set(_rename_partners(terms))
     patterns = [(t, _pattern(t)) for t in terms]
-    changed_docs = {p for _, p, _ in changed} if docs_in_repo else set()
     impacts: list[Impact] = []
     for section in sections:
         hits = [t for t, rx in patterns if rx.search(section.text)]
@@ -116,7 +145,7 @@ def match(
             impacts.append(Impact(
                 section, tuple(used), declared, adjustment,
                 "high" if declared and used else confidence, url,
-                section.path in changed_docs,
+                docs_in_repo and _is_updated(section, changed, hunks),
             ))
     impacts.sort(key=lambda i: (
         CONFIDENCE_RANK[i.confidence], -len(i.terms), i.section.path, i.section.start_line))
@@ -125,6 +154,7 @@ def match(
 
 def undocumented(terms: list[Term], sections: list[Section]) -> list[Term]:
     """Added public terms that no section mentions, except the new half of a reported rename."""
+    terms = _without_moves(terms)
     partners = _rename_partners(terms)
     found: list[Term] = []
     seen: set[tuple[str, str]] = set()

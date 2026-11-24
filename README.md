@@ -34,7 +34,7 @@ The skills read an optional `## Documentation` section in the target project's `
 - Docs pages: off
 ```
 
-`Published as a whole` also sets the doc set that `docs-impact` checks. The other three keys belong to `docs-impact`:
+`Published as a whole` also sets the doc set that `docs-impact` checks, but `docs-impact` scans only documentation formats (Markdown/MDX, reStructuredText, AsciiDoc, HTML) and excludes changelogs by default, so entries such as `contracts/*.yaml` and `CHANGELOG.md` above are ignored by it. The other three keys belong to `docs-impact`:
 
 - `Docs source`: where the documentation lives when it is not the repository itself, a local path or a git URL,
   optionally `@<ref>`.

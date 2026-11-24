@@ -69,6 +69,9 @@ _DIFF_HEADER = re.compile(r"^diff --git a/(.*) b/(.*)$")
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
+_NEW_RANGE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
 class GitError(Exception):
     """A git command failed."""
 
@@ -110,6 +113,17 @@ def is_ignored(path: str) -> bool:
     )
 
 
+def is_tooling_file(path: str) -> bool:
+    """CI and container tooling: its configuration keys are not a public contract."""
+    parts = PurePosixPath(path).parts
+    name = parts[-1].lower() if parts else ""
+    return (
+        any(p in (".github", ".circleci") for p in parts[:-1])
+        or name.startswith((".gitlab-ci", ".pre-commit-config.", "dockerfile", "docker-compose"))
+        or name in ("compose.yml", "compose.yaml")
+    )
+
+
 def _keep(text: str, kind: str) -> bool:
     if len(text) < MIN_LENGTH or text.lower() in STOPLIST:
         return False
@@ -124,7 +138,7 @@ def _line_terms(path: str, content: str) -> list[tuple[str, str]]:
         if ext in exts:
             found += [(m.group(1), "symbol") for m in rx.finditer(content)]
     for kind, rxs in PATTERNS.items():
-        if kind == "config_key" and ext not in CONFIG_EXTENSIONS:
+        if kind == "config_key" and (ext not in CONFIG_EXTENSIONS or is_tooling_file(path)):
             continue
         for rx in rxs:
             for m in rx.finditer(content):
@@ -248,3 +262,32 @@ def changed_files(
         elif len(parts) >= 2:
             files.append((parts[0][:1], parts[1], None))
     return files
+
+
+def doc_hunks(
+    repo: Path, base: str, head: str, changed: list[tuple[str, str, str | None]]
+) -> dict[str, list[tuple[int, int]]]:
+    """New-side line ranges (start, end) the branch changed, per documentation file."""
+    paths: list[str] = []
+    for _, path, old in changed:
+        if PurePosixPath(path).suffix.lower() in DOC_EXTENSIONS:
+            paths += [p for p in (path, old) if p]
+    if not paths:
+        return {}
+    out = run_git(
+        repo, "diff", "--unified=0", "-M", "--no-color", "--no-ext-diff", "--no-textconv",
+        "--src-prefix=a/", "--dst-prefix=b/", "--end-of-options", f"{base}...{head}", "--", *paths,
+    )
+    ranges: dict[str, list[tuple[int, int]]] = {}
+    current: str | None = None
+    for raw in out.splitlines():
+        header = _DIFF_HEADER.match(raw)
+        if header:
+            current = header.group(2)
+            continue
+        hunk = _NEW_RANGE.match(raw)
+        if hunk and current:
+            start = int(hunk.group(1))
+            count = int(hunk.group(2)) if hunk.group(2) is not None else 1
+            ranges.setdefault(current, []).append((start, max(start, start + count - 1)))
+    return ranges
