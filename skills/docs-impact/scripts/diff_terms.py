@@ -1,4 +1,7 @@
-"""Extract public terms (symbols, flags, env vars, config keys, routes, paths) from a git diff."""
+"""Extract public terms (symbols, flags, env vars, config keys, routes, paths) from a git diff.
+
+Requires git 2.28 or later (``--end-of-options``, ``git init -b`` in the tests).
+"""
 
 from __future__ import annotations
 
@@ -11,6 +14,13 @@ STOPLIST = frozenset(
     {"main", "init", "test", "data", "name", "value", "self", "args", "none", "true", "false"}
 )
 MIN_LENGTH = 4
+# Generic words that say nothing about a public contract when they are config keys.
+CONFIG_KEY_STOPLIST = frozenset(
+    {"version", "description", "resolved", "integrity", "dependencies", "type"}
+)
+DOC_EXTENSIONS = frozenset(
+    {".md", ".mdx", ".markdown", ".rst", ".adoc", ".asciidoc", ".html", ".htm"}
+)
 CONFIG_EXTENSIONS = frozenset({".yaml", ".yml", ".toml", ".json", ".ini"})
 
 _ROUTE_SEGMENT = r"[A-Za-z0-9_{}<>:.-]+"
@@ -55,7 +65,7 @@ PATTERNS = {
 }
 
 _DIFF_HEADER = re.compile(r"^diff --git a/(.*) b/(.*)$")
-_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
 class GitError(Exception):
@@ -64,6 +74,12 @@ class GitError(Exception):
 
 @dataclass(frozen=True)
 class Term:
+    """A public term found in the diff.
+
+    ``line`` is the line in the new file for ``added`` and ``changed`` terms and the line in
+    the old file for ``removed`` ones. Path terms (renames) carry ``line=0``.
+    """
+
     text: str
     kind: str
     change: str
@@ -79,8 +95,24 @@ def is_test_file(path: str) -> bool:
     return any(p in ("tests", "__tests__") for p in parts[:-1])
 
 
-def _keep(text: str) -> bool:
-    return len(text) >= MIN_LENGTH and text.lower() not in STOPLIST
+def is_generated_file(path: str) -> bool:
+    name = PurePosixPath(path).name.lower()
+    return name.endswith(".lock") or "-lock." in name or ".min." in name
+
+
+def is_ignored(path: str) -> bool:
+    """Files that yield no terms: tests, documentation, lockfiles and minified output."""
+    return (
+        is_test_file(path)
+        or is_generated_file(path)
+        or PurePosixPath(path).suffix.lower() in DOC_EXTENSIONS
+    )
+
+
+def _keep(text: str, kind: str) -> bool:
+    if len(text) < MIN_LENGTH or text.lower() in STOPLIST:
+        return False
+    return not (kind == "config_key" and text.lower() in CONFIG_KEY_STOPLIST)
 
 
 def _line_terms(path: str, content: str) -> list[tuple[str, str]]:
@@ -97,7 +129,7 @@ def _line_terms(path: str, content: str) -> list[tuple[str, str]]:
             for m in rx.finditer(content):
                 text = m.group(1).rstrip("-") if kind == "flag" else m.group(1)
                 found.append((text, kind))
-    return [(t, k) for t, k in found if _keep(t)]
+    return [(t, k) for t, k in found if _keep(t, k)]
 
 
 class _FileState:
@@ -105,28 +137,28 @@ class _FileState:
 
     def __init__(self, path: str) -> None:
         self.path = path
-        self.skip = is_test_file(path)
-        self.seen: dict[tuple[str, str], list] = {}  # (text, kind) -> [sides, first line]
+        self.skip = is_ignored(path)
+        # (text, kind) -> {side: first line on that side}
+        self.seen: dict[tuple[str, str], dict[str, int]] = {}
         self.extra: list[Term] = []
 
     def add(self, side: str, content: str, line: int) -> None:
         if self.skip:
             return
         for key in _line_terms(self.path, content):
-            entry = self.seen.setdefault(key, [set(), line])
-            entry[0].add(side)
+            self.seen.setdefault(key, {}).setdefault(side, line)
 
     def add_rename(self, old: str, new: str) -> None:
-        if is_test_file(old) and is_test_file(new):
+        if is_ignored(old) and is_ignored(new):
             return
         self.extra.append(Term(old, "path", "removed", new, 0))
         self.extra.append(Term(new, "path", "added", new, 0))
 
     def terms(self) -> list[Term]:
         out = list(self.extra)
-        for (text, kind), (sides, line) in self.seen.items():
-            change = "changed" if len(sides) == 2 else ("added" if "+" in sides else "removed")
-            out.append(Term(text, kind, change, self.path, line))
+        for (text, kind), lines in self.seen.items():
+            change = "changed" if len(lines) == 2 else ("added" if "+" in lines else "removed")
+            out.append(Term(text, kind, change, self.path, lines.get("+", lines.get("-", 0))))
         return out
 
 
@@ -136,13 +168,15 @@ def parse_diff(diff_text: str) -> list[Term]:
     state: _FileState | None = None
     rename_from: str | None = None
     in_hunk = binary = False
-    new_line = 0
+    old_line = new_line = 0
     for raw in diff_text.splitlines():
-        header = _DIFF_HEADER.match(raw)
-        if header:
+        if raw.startswith("diff --git "):
             if state:
                 terms += state.terms()
-            state, rename_from, in_hunk, binary = _FileState(header.group(2)), None, False, False
+            header = _DIFF_HEADER.match(raw)
+            # A header git quoted (odd characters in the path) is skipped, not misparsed.
+            state = _FileState(header.group(2)) if header else None
+            rename_from, in_hunk, binary = None, False, False
             continue
         if state is None or binary:
             continue
@@ -151,10 +185,14 @@ def parse_diff(diff_text: str) -> list[Term]:
             continue
         hunk = _HUNK_HEADER.match(raw)
         if hunk:
-            in_hunk, new_line = True, int(hunk.group(1))
+            in_hunk, old_line, new_line = True, int(hunk.group(1)), int(hunk.group(2))
         elif in_hunk and raw[:1] in ("+", "-"):
-            state.add(raw[0], raw[1:], new_line)
-            new_line += raw[0] == "+"
+            if raw[0] == "+":
+                state.add("+", raw[1:], new_line)
+                new_line += 1
+            else:
+                state.add("-", raw[1:], old_line)
+                old_line += 1
         elif not in_hunk:
             rename_from = _header_line(state, raw, rename_from)
     if state:
@@ -169,7 +207,7 @@ def _header_line(state: _FileState, raw: str, rename_from: str | None) -> str | 
         state.add_rename(rename_from, raw[len("rename to "):])
     elif raw.startswith("+++ b/"):
         state.path = raw[len("+++ b/"):].split("\t")[0]
-        state.skip = is_test_file(state.path)
+        state.skip = is_ignored(state.path)
     return rename_from
 
 
@@ -187,14 +225,18 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def extract_terms(repo: Path, base: str, head: str = "HEAD") -> list[Term]:
-    return parse_diff(_git(repo, "diff", "--unified=0", "-M", f"{base}...{head}"))
+    out = _git(
+        repo, "diff", "--unified=0", "-M", "--no-color", "--no-ext-diff", "--no-textconv",
+        "--src-prefix=a/", "--dst-prefix=b/", "--end-of-options", f"{base}...{head}",
+    )
+    return parse_diff(out)
 
 
 def changed_files(
     repo: Path, base: str, head: str = "HEAD"
 ) -> list[tuple[str, str, str | None]]:
     """Return (status, path, old_path) per changed file; old_path only for renames and copies."""
-    out = _git(repo, "diff", "--name-status", "-M", f"{base}...{head}")
+    out = _git(repo, "diff", "--name-status", "-M", "--end-of-options", f"{base}...{head}")
     files: list[tuple[str, str, str | None]] = []
     for line in out.splitlines():
         parts = line.split("\t")

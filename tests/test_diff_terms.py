@@ -92,19 +92,79 @@ class ParseDiffTest(unittest.TestCase):
 
     def test_rename_yields_path_terms(self):
         text = textwrap.dedent("""\
-            diff --git a/docs/old_name.md b/docs/new_name.md
+            diff --git a/assets/old_name.txt b/assets/new_name.txt
             similarity index 100%
-            rename from docs/old_name.md
-            rename to docs/new_name.md
+            rename from assets/old_name.txt
+            rename to assets/new_name.txt
             """)
         got = {(t.text, t.kind, t.change) for t in diff_terms.parse_diff(text)}
-        self.assertIn(("docs/old_name.md", "path", "removed"), got)
-        self.assertIn(("docs/new_name.md", "path", "added"), got)
+        self.assertIn(("assets/old_name.txt", "path", "removed"), got)
+        self.assertIn(("assets/new_name.txt", "path", "added"), got)
+
+    def test_lockfiles_and_generated_files_skipped(self):
+        for path in ("package-lock.json", "Cargo.lock", "yarn-lock.yaml", "app.min.js"):
+            terms = diff_terms.parse_diff(diff(path, added=['  "resolved": "x"', "export function renderAll() {"]))
+            self.assertEqual(terms, [], path)
+
+    def test_generic_config_keys_dropped(self):
+        terms = diff_terms.parse_diff(diff(
+            "conf.yaml", added=["version: 2", "description: x", "retry_limit: 5"]))
+        self.assertEqual([t.text for t in terms], ["retry_limit"])
+
+    def test_documentation_files_yield_no_terms(self):
+        for path in ("README.md", "docs/a.rst", "site/index.html", "x.adoc"):
+            terms = diff_terms.parse_diff(diff(path, added=['use "--no-publish" and "/api/orders"']))
+            self.assertEqual(terms, [], path)
+
+    def test_removed_term_line_is_old_file_line(self):
+        text = ("diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n"
+                "@@ -10,2 +9,0 @@\n-def gone_one():\n-def gone_two():\n")
+        got = {t.text: t.line for t in diff_terms.parse_diff(text)}
+        self.assertEqual(got, {"gone_one": 10, "gone_two": 11})
+
+    def test_multi_hunk_line_numbers(self):
+        text = ("diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n"
+                "@@ -3,0 +4,2 @@\n+def first_new():\n+x = 1\n"
+                "@@ -20 +22 @@\n-def old_name():\n+def second_new():\n")
+        got = {t.text: (t.change, t.line) for t in diff_terms.parse_diff(text)}
+        self.assertEqual(got["first_new"], ("added", 4))
+        self.assertEqual(got["second_new"], ("added", 22))
+        self.assertEqual(got["old_name"], ("removed", 20))
+
+    def test_other_language_symbols(self):
+        cases = {
+            "a.ts": ("export async function loadOrders() {", "loadOrders"),
+            "A.java": ("    public Order cancelOrder(int id) {", "cancelOrder"),
+            "A.cs": ("public sealed class OrderService {", "OrderService"),
+            "a.kt": ("public fun placeOrder(x: Int) {", "placeOrder"),
+            "a.rs": ("pub fn send_order(o: Order) {", "send_order"),
+        }
+        for path, (line, name) in cases.items():
+            got = by_text(diff_terms.parse_diff(diff(path, added=[line])))
+            self.assertEqual(got.get(name), "added", path)
+        self.assertEqual(diff_terms.parse_diff(diff("a.rs", added=["fn hidden_fn() {"])), [])
+
+    def test_quoted_header_does_not_leak_state(self):
+        text = ('diff --git "a/we\\"ird.py" "b/we\\"ird.py"\n--- "a/we\\"ird.py"\n'
+                '+++ "b/we\\"ird.py"\n@@ -0,0 +1 @@\n+def hidden_one():\n')
+        first = diff("a.py", added=["def visible_one():"])
+        got = by_text(diff_terms.parse_diff(first + text))
+        self.assertEqual(got, {"visible_one": "added"})
+
+    def test_rename_with_edit_uses_new_path(self):
+        text = ("diff --git a/src/old.py b/src/new.py\nsimilarity index 80%\n"
+                "rename from src/old.py\nrename to src/new.py\n--- a/src/old.py\n+++ b/src/new.py\n"
+                "@@ -1 +1 @@\n-def old_api():\n+def new_api():\n")
+        terms = diff_terms.parse_diff(text)
+        self.assertEqual({t.file for t in terms}, {"src/new.py"})
+        self.assertEqual(by_text(terms)["new_api"], "added")
+        self.assertEqual(by_text(terms)["src/old.py"], "removed")
 
 
 def git(repo, *args):
     return subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com",
+         "-c", "commit.gpgsign=false", *args],
         cwd=repo, check=True, capture_output=True, text=True)
 
 
@@ -138,6 +198,29 @@ class GitTest(unittest.TestCase):
             diff_terms.extract_terms(self.repo, "nope")
         with self.assertRaises(diff_terms.GitError):
             diff_terms.changed_files(self.repo, "nope")
+
+    def test_noprefix_config_does_not_hide_terms(self):
+        git(self.repo, "config", "diff.noprefix", "true")
+        got = by_text(diff_terms.extract_terms(self.repo, "main"))
+        self.assertEqual(got["--out-dir"], "added")
+
+    def test_option_like_base_raises_git_error(self):
+        with self.assertRaises(diff_terms.GitError):
+            diff_terms.extract_terms(self.repo, "--output=x")
+
+    def test_non_utf8_content_does_not_crash(self):
+        (self.repo / "legacy.py").write_bytes(b"# caf\xe9\ndef render_page():\n    pass\n")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-m", "latin1")
+        got = by_text(diff_terms.extract_terms(self.repo, "main"))
+        self.assertEqual(got["render_page"], "added")
+
+    def test_rename_with_edit_in_repo(self):
+        (self.repo / "new.txt").write_text("hello world\n" * 4 + 'add("--extra-flag")\n')
+        git(self.repo, "commit", "-am", "edit")
+        got = by_text(diff_terms.extract_terms(self.repo, "main"))
+        self.assertEqual(got["--extra-flag"], "added")
+        self.assertEqual(got["old.txt"], "removed")
 
 
 if __name__ == "__main__":
