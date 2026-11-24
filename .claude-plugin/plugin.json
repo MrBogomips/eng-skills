@@ -1,7 +1,7 @@
 {
   "name": "eng-skills",
-  "version": "0.2.0",
-  "description": "Skills and agents for engineering work: technical writing, architecture and design.",
+  "version": "0.3.0",
+  "description": "Skills and agents for engineering work: technical writing, documentation impact checks, architecture and design.",
   "author": {
     "name": "Giovanni Costagliola"
   },
