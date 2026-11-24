@@ -21,9 +21,22 @@ cat > docs/guides/getting-started.md <<'X'
 
 Install pixkit and run `pixkit convert photo.png`.
 X
-cat > pixkit/__init__.py <<'X'
+cat > pixkit/cli.py <<'X'
+import argparse
+
+
 def convert(path):
-    return path
+    print(f"converting {path}")
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="pixkit")
+    sub = p.add_subparsers(dest="command", required=True)
+    c = sub.add_parser("convert")
+    c.add_argument("path")
+    args = p.parse_args(argv)
+    if args.command == "convert":
+        convert(args.path)
 X
 $G add -A && $G commit -q -m "initial"
 git checkout -q -b feature/x
@@ -32,10 +45,32 @@ cat > docs/guides/batch.md <<'X'
 
 Run `pixkit batch ./photos` to convert every image in a folder.
 X
-cat >> pixkit/__init__.py <<'X'
+cat > pixkit/cli.py <<'X'
+import argparse
+from pathlib import Path
+
+
+def convert(path):
+    print(f"converting {path}")
 
 
 def batch(folder):
-    return folder
+    for path in sorted(Path(folder).iterdir()):
+        if path.is_file():
+            convert(str(path))
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="pixkit")
+    sub = p.add_subparsers(dest="command", required=True)
+    c = sub.add_parser("convert")
+    c.add_argument("path")
+    b = sub.add_parser("batch")
+    b.add_argument("folder")
+    args = p.parse_args(argv)
+    if args.command == "convert":
+        convert(args.path)
+    else:
+        batch(args.folder)
 X
 $G add -A && $G commit -q -m "docs: add batch guide"
